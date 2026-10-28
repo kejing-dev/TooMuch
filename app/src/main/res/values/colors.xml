@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- app icon background: warm off-white, registered in the factory icon-colors note (design appIcon) -->
+    <color name="ic_launcher_background">#EFE7D8</color>
+</resources>

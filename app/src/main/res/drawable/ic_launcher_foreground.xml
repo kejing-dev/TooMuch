@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- tools/make_icons.py: design appIcon (house + three sound arcs, outer one orange-red) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M30,50 L54,30 L78,50 L78,80 L72,80 L72,66 L64,66 L64,80 L30,80 Z" android:strokeColor="#FF2B2B2B" android:strokeWidth="4.2" android:strokeLineJoin="round" android:fillColor="#00000000" />
+    <path android:pathData="M39,74 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" android:fillColor="#FF2B2B2B" />
+    <path android:pathData="M46.00,74.00 A7.00,7.00 0 0,0 39.00,67.00" android:strokeColor="#FF2B2B2B" android:strokeWidth="3.4" android:strokeLineCap="butt" android:fillColor="#00000000" />
+    <path android:pathData="M52.00,74.00 A13.00,13.00 0 0,0 39.00,61.00" android:strokeColor="#FF2B2B2B" android:strokeWidth="3.4" android:strokeLineCap="butt" android:fillColor="#00000000" />
+    <path android:pathData="M58.00,74.00 A19.00,19.00 0 0,0 39.00,55.00" android:strokeColor="#FFE0533B" android:strokeWidth="3.4" android:strokeLineCap="butt" android:fillColor="#00000000" />
+</vector>
