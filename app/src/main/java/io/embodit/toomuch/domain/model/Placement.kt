@@ -58,9 +58,14 @@ object Placement {
     const val FRONT_RANGE = 0.9f
     const val FRONT_DOWN_DEG = 8f
 
-    /** Tray: 0.9 m ahead, 0.30 m below the head, tilted 10 deg towards the user. */
-    const val TRAY_AHEAD = 0.9f
-    const val TRAY_BELOW = 0.30f
+    /**
+     * Tray: 0.8 m ahead, 0.55 m below the eyes, tilted 10 deg towards the user. v0.1.1: below the line to the main
+     * window (it opens 1.75 m ahead; native-window-move §3 wants tabletop things >= 0.4 m under the sightline). On the
+     * emulator the window's lower edge sits ~15.6 deg down and its control dot ~18 deg: at 0.55 / 0.8 m the tallest
+     * things on the far edge stay below ~21 deg (v0.1.0 had 0.30 / 0.9 m, which put the move dot on the book).
+     */
+    const val TRAY_AHEAD = 0.8f
+    const val TRAY_BELOW = 0.55f
     const val TRAY_TILT_DEG = 10f
 
     /** True when azimuth / elevation (degrees, + right / + up) fall into the body panel's cone. */
@@ -165,7 +170,7 @@ object Placement {
 
 /** Board dimensions for geometry outside the task (kept in step with `TrayLayout`). */
 object TrayLayoutGeometry {
-    const val W = 0.80f
-    const val D = 0.50f
+    const val W = 0.90f
+    const val D = 0.56f
     const val T = 0.02f
 }

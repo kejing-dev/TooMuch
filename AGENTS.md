@@ -4,8 +4,8 @@ Empathy experience about sensory overload for PICO OS 6. Kotlin, PICO Spatial SD
 Stage (Full Space, passthrough), package `io.embodit.toomuch`. You pin six everyday sounds (fridge,
 clock, plastic bag, dripping tap, lamp buzz, phone pings) to real spots in your room, do a small task
 on a tray in front of you while the sounds slowly grow and soft colours drift at the edge of view,
-then unload the sounds one by one and do the task again in the quiet. No flashing; "Quiet now" is
-always on the body panel.
+then unload the sounds one by one and do the task again in the quiet. No flashing; "Quiet now" heads
+every page of the main window (and the Stage chip while the window is closed).
 
 Design package (binding): `../spatial-app-factory/apps/too-much/design-package.json` (revision 3,
 archetype D, STAGE_MIXED, single_panel_with_popup, states S01 - S16, interactions T1 - T24, safety
@@ -20,7 +20,7 @@ folders were only read.
 
 ```
 app/src/main/java/io/embodit/toomuch/
-  Main.kt                       DefaultStage { TooMuchTheme { TooMuchScreen() } }
+  Main.kt                       DefaultStage { TooMuchScreen() } + one Planar WindowContainer { TmWindow() } (v0.1.1)
   domain/model/                 pure Kotlin, unit-tested
     Vec3.kt                     Vec3 / Quat4
     Sources.kt                  the six sources: gains L0-L4, caps, pulse intervals, unload options; Intensity
@@ -36,17 +36,22 @@ app/src/main/java/io/embodit/toomuch/
   data/                         SettingsStore (prefs + "my home" source -> anchor map), AnchorGateway
   platform/                     TmLog, TmGraph, HeadTracker, ControllerInput (ray, trigger, stick x/y),
                                 anchor/WorldAnchorGateway, audio/SoundOut (ObjectSoundOut, PoolSoundOut, UiSfx)
+  domain/usecase/LevelGate.kt   the window opens only with a level head (D9), unit-tested (LevelGateTest)
   ui/tm/                        TmUiState (+ design state id), TmEvent, TmViewModel (state machine, owns the Engine),
-                                TooMuchScreen
+                                TmShared (process-level store: the ViewModel, window lifecycle, level gate),
+                                TooMuchScreen (Stage: opens / recalls / closes the window, exit)
+  ui/tm/window/                 MainWindow (factory template: native TabBar, exitApp), TmWindow (3 pages)
   ui/tm/scene/                  TmScene (the one ECS system: engine step, audio 10 Hz, ripples, tray, overlay, aim,
-                                stick, panel placement, taps / drags), Views (Meshes, SourceView, RoomView, TrayView,
-                                OverlayView, AimView), Textures, SceneKit, SceneMaterials, PanelRig, PanelSpec, Follower
-  ui/tm/components/             BodyPanel, Cards (front card, unload card, menu, labels, room tag), TmStage, Common,
-                                Strings (run-time language)
+                                stick, chip placement + level-gate feed, taps / drags), Views (Meshes, SourceView, RoomView,
+                                TrayView, OverlayView, AimView), Textures, SceneKit, SceneMaterials, PanelRig, PanelSpec
+  ui/tm/components/             BodyPanel (safety strip, step title, capsules, step buttons, sound grid), Cards (front
+                                content, unload card, settings, room page, labels), TmStage (labels + chip), Common
+                                (+ fits() overflow log), Strings (run-time language)
 app/src/debug/                  DebugCommandReceiver + DebugCommands (QA hooks)
-app/src/test/                   TooMuchModelTest (design verification JVM list)
-app/src/main/assets/audio/      synthesised WAVs (tools/gen_sounds.py)
-tools/                          gen_sounds.py, gen_strings.py (strings from the design copy), make_icons.py
+app/src/test/                   TooMuchModelTest (design verification JVM list), LevelGateTest, TrayLayoutTest
+app/src/main/assets/audio/      CC0 recordings of the six sounds (tools/import_cc0.py) + two synthesised UI cues (tools/gen_sounds.py)
+tools/                          import_cc0.py (freesound CC0 previews -> assets), gen_sounds.py (UI cues), loudness.py (offline
+                                loudness render), gen_strings.py (strings from the design copy), make_icons.py
 ```
 
 Data flows one way: panels, scene taps and debug commands -> `TmViewModel.onEvent` -> `TmUiState` ->
@@ -66,7 +71,7 @@ poses) directly. Nothing per frame goes through Compose.
   within 0.3 m, get an anchor `toomuch-<source>` (failure keeps the card, log `ANCHOR fallback`), and
   preview 2 s at L1. S04c: Nearer / Farther 0.5 m, Default spot, Delete, stick x turns the card (D1).
   Auto-place / Start (>= 3 pinned) put the rest on their default spots.
-- S05 baseline: tray 0.9 m ahead, 0.30 m below the head, all sources at L0.
+- S05 baseline: tray 0.8 m ahead, 0.55 m below the head (v0.1.1), all sources at L0.
 - S06 / S07 task: level formula; hold a candidate 1.5 s to look under it; keys under the 4th different
   candidate once the level is >= 3; tap the keys -> hook; drag mug / glasses / book into their outlines
   (5 -> 2 cm by level). Bag and phone shots drop what is held (each >= 5 s, both >= 3 s apart). S08 at L4:
@@ -202,8 +207,71 @@ Screenshots land in `../spatial-app-factory/apps/too-much/build/shots/`. Set the
 - The body panel (40 deg left) sits at the edge of the emulator's narrow view; turn the camera 35 deg left to
   photograph it (`emu.sh drag 1400 1080 750 1080 -Button right`).
 
+## v0.1.1 · one system window (rework 2026-11-12)
+
+User (2026-11-02): panels overlapped front / back; merge them into one template, use SpatialUI's native draggable
+bar and the native TabBar. Factory snippet `prompts/snippets/native-window-move.md` + `MainWindowTemplate.kt`.
+
+- All 2D content is in one Planar `WindowContainer` (600 x 640 dp), pages switch with the native SpatialUI `TabBar`
+  only: **Experience** (step title + level ring, guide, then the intro / quiet / ending / about / unavailable / forget
+  -home card, the unload card, or the capsules + step buttons), **Room** (virtual room size), **Settings** (language,
+  intensity, reset around me, bring panel here, re-pin, forget home, about, Quit app with an inline confirmation).
+  Every page starts with "Quiet now" + Mute. Moving / closing / minimising are the system window controls.
+- The room / settings tabs are the old menu (S13: clocks pause while open); `TmEvent.TabSelected`, debug `tab id=...`.
+- The ViewModel is process-level (`TmShared`); a second Stage in the same process starts from S01 (`stageStarted`).
+- The window opens only with the head within 10 deg of level for 300 ms (`LevelGate`, D9); while it waits, the Stage
+  shows "Look straight ahead / and the panel opens" on the line of sight; fallbacks 5 s without a head pose, 15 s
+  without Stage frames. After the window's × (or minimise) the Stage shows a chip 25 deg left / 12 deg down / 0.8 m
+  with **Quiet now** and **Open panel** (C1 keeps "Quiet now" reachable while the window is closed).
+- Bring panel here = close, wait for ON_DESTROY, reopen through the level gate (debug `window id=recall`).
+- Exit (template order): release scene / sound / window, `closeWindowContainer`, `closeStage`, `finishAndRemoveTask`,
+  `exitProcess` after 400 ms. "Skip to unloading" and leaving from the quiet card mid-run ask first, in place.
+- Removed: body / front / unload / menu attachment panels, the lazy-follow `Follower` (D21), the room size tag.
+  Stage panels left: six source labels (world text) and the chip.
+- 3D off the line to the window (it opens 1.75 m straight ahead): tray 0.8 m ahead, 0.55 m under the eyes (was 0.9 /
+  0.30; on the emulator the window's move dot sat on the book); clock default spot 0.9 m left of the front wall's
+  middle; the phone's tray-side spot follows the tray height.
+- D24: the room's six face colliders are enabled only while pinning (`RoomView.setPinnable`), see
+  `../spatial-app-factory/apps/too-much/build/reality-audit.md`.
+- Short pages show a live **sound grid** (six sources, five dots of their current level, a tick once unloaded) in
+  baseline / task / redo / quiet / forget-home, from `TmViewModel.liveLevels()` (2.5 Hz).
+- Debug additions: `window id=open|close|recall`, `tab id=now|room|howto|settings`; `park` and the BODY / FRONT / UNLOAD /
+  MENU control names are gone (`ui id=body_quiet`, `body_mute`, `menu_*`, `chip_quiet`, `open_window`,
+  `skip_no` / `skip_yes`, `quiet_exit_no` / `quiet_exit_yes`, `exit_no` / `exit_yes` exist).
+- Emulator 6.1 (emulator-5556, Pico_Emulator_6_1_c, 2160 SD): `pico-cli interact` has no `uiautomator spatial`
+  backend on this ROM; real clicks go through `tools/harness/emu.sh click` (window buttons, the TabBar, the system
+  Close menu under the window, the chip all respond). The TabBar shows icons, labels on hover, in the app language.
+
+- Sounds (2026-11-16, user: 「换录音」, factory B20): the six everyday sounds are CC0 recordings from freesound.org
+  (sources, licences and processing per file in `../spatial-app-factory/apps/too-much/build/sound-sources.md`).
+  `tools/import_cc0.py` cuts loops / ticks / pieces and gives each file the RMS its synthesised file had, so the
+  level tables and the gentle -8 dB default keep their meaning (render: old -25.5, new -26.1 dBFS voiced RMS). The cue
+  layers are filtered copies of the same recordings. Only `ui_snap` / `ui_ding` stay synthesised (UI cues).
+- A fourth tab **How to** (profile B19): pin, look under, put back, unload, quiet now, move / bring back the panel,
+  each with the hands way and the controller way (`how_to_*` strings). Like Room / Settings it pauses the clocks.
+- Buttons are 64 dp high (worded buttons, capsules, Quiet now, unload options, stepper keys) and side-by-side buttons
+  16 dp apart (profile B31 gates). Tray drags sum SDK 6.1.9's per-event `dragAmount` (gate drag-delta).
+
+## v0.1.2 · QA #2 rework (2026-11-16)
+
+- Tray things are modelled in code (`ui/tm/scene/ItemModels.kt`, q2-1 / B12): mug with handle and coffee, keys with
+  bits on a ring, folded glasses with lenses, book with page block and label, spiral notebook with elastic, envelopes
+  with flap / stamp / address lines, folded striped scarf with fringes, remote with pad / number keys / red power key.
+  The scene stays unlit; each part is an up-facing mesh in its colour plus a darker side mesh (`ItemTone`), built one
+  part per frame (`Meshes` steps, ANR rule).
+- Tray layout (q2-2 / D17): board 0.90 x 0.56 m, candidates in a 2 x 2 grid on the left, mug right of the back row,
+  book / remote / glasses along the front, outlines on the right strip, hook between mug and its outline; every pair
+  of footprints >= 5 cm apart in all four seeds (`TrayLayoutTest`). Revealed keys lie in their candidate's own
+  footprint and that candidate stays lifted until they are tapped (`TrayTask.keysWaiting`).
+- Short pages (q2-3): starting, room ready and unavailable spread their content (sound grid, room size, what to do)
+  over the page; the settings quit confirmation shows an icon and "your pins stay saved" above the question.
+- Standard intensity is -3.5 dB (L4 mix peak <= -1.5 dBFS over 12 render seeds); gentle stays -8 dB (user waiver).
+
+Deviations 3 (room tag) and 10 (front card over the tray) no longer apply; 13 - 18 are the items above.
+
 ## Not verified yet
 
-On a headset only: spatial audio (direction, distance, HRTF; whether ObjectAudioComponent sounds at all on
-the emulator was not checked by ear), the synthesised sounds' realism, controller ray / trigger / stick,
+On a headset only: whether a controller trigger aimed at the system window also reaches the room faces while
+pinning (the emulator has no controller), the window size / text size at real distance, spatial audio (direction, distance, HRTF; whether ObjectAudioComponent sounds at all on
+the emulator was not checked by ear), how the CC0 recordings sound in spatial audio on a headset, controller ray / trigger / stick,
 eye-tracking pinch precision, how strong the haze and blobs feel in real passthrough, tray height comfort.

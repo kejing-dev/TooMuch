@@ -100,10 +100,10 @@ object Sources {
     const val TAP_BASS_FROM = 3
 }
 
-/** Strength of the whole mix (design A2): gentle presses the group 8 dB down (default), standard 0 dB. */
+/** Strength of the whole mix (design A2): gentle presses the group 8 dB down (default), standard -3.5 dB (peak <= -1 dBFS). */
 enum class Intensity(val tag: String, val groupDb: Float) {
     GENTLE("gentle", -8f),
-    STANDARD("standard", 0f);
+    STANDARD("standard", -3.5f); // v0.1.2: -3.5 dB keeps the L4 mix peak <= -1.5 dBFS over 12 render seeds (was +2.0 at 0 dB)
 
     companion object {
         fun fromTag(tag: String?): Intensity = entries.firstOrNull { it.tag == tag?.lowercase() } ?: GENTLE

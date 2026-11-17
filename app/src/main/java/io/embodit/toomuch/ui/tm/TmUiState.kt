@@ -29,7 +29,7 @@ enum class Screen {
 
 enum class TaskStage { KEYS, RETURN }
 
-enum class MenuPage { MAIN, ROOM }
+enum class MenuPage { MAIN, ROOM, HOWTO }
 
 /** Layouts of the one front card (design `panels.frontCard.layouts`). */
 enum class FrontLayout { STARTING, INTRO, QUIET, ENDING, ABOUT, UNAVAILABLE, CONFIRM_CLEAR }
@@ -93,6 +93,8 @@ data class TmUiState(
     val hold: Boolean = false,
     /** Sound back-end name for the state line. */
     val audio: String = "object",
+    /** Bumped by [Bring panel here]: the Stage closes the window and opens it again in front of the head. */
+    val recallSerial: Int = 0,
 ) {
     /** The design state id (S01 .. S15; menu S13 on top of anything). */
     val designState: String
@@ -176,6 +178,12 @@ sealed interface TmEvent {
     data class MuteSet(val muted: Boolean) : TmEvent
 
     data object MenuToggle : TmEvent
+
+    /** A press on the main window's TabBar (`TmPages`): the room / settings pages are the old menu (S13). */
+    data class TabSelected(val page: String) : TmEvent
+
+    /** Settings [Bring panel here]. */
+    data object Recall : TmEvent
 
     data class CapsuleSource(val source: SourceId) : TmEvent
 

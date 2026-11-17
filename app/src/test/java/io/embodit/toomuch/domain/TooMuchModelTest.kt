@@ -96,7 +96,9 @@ class TooMuchModelTest {
             assertTrue(s.capDb <= 0f)
         }
         assertEquals(-8f, Intensity.GENTLE.groupDb, 0f)
-        assertEquals(0f, Intensity.STANDARD.groupDb, 0f)
+        // v0.1.2: gentle stays -8 dB (user waiver 2026-11-16 「A 保留温和档」); standard -3.5 dB so the L4 mix peak stays <= -1 dBFS
+        assertEquals(-3.5f, Intensity.STANDARD.groupDb, 0f)
+        assertTrue(Intensity.STANDARD.groupDb > Intensity.GENTLE.groupDb)
     }
 
     @Test

@@ -59,6 +59,11 @@ internal class SceneMaterials(private val shared: SharedResources) {
             }
         )
 
+    private val tones = HashMap<Color, Pair<Material, Material>>()
+
+    /** The tray things' colour for faces looking up and its darker tone for the sides (ItemModels, no lights). */
+    fun tone(color: Color): Pair<Material, Material> = tones.getOrPut(color) { unlit(color) to unlit(ItemTone.side(color)) }
+
     private fun unlit(color: Color, twoSided: Boolean = true): UnlitMaterial =
         shared.keep(
             UnlitMaterial.create(BlendingMode.OPAQUE).apply {

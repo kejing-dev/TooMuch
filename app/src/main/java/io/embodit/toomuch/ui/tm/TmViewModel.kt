@@ -189,6 +189,23 @@ class TmViewModel(private val store: SettingsStore, private val anchors: AnchorG
                 TmLog.i("MUTE ${e.muted}")
             }
             TmEvent.MenuToggle -> setMenu(!s.menuOpen)
+            is TmEvent.TabSelected ->
+                when (e.page) {
+                    "room" -> {
+                        engine.paused = true
+                        set { it.copy(menuOpen = true, menuPage = MenuPage.ROOM) }
+                    }
+                    "howto" -> {
+                        engine.paused = true
+                        set { it.copy(menuOpen = true, menuPage = MenuPage.HOWTO) }
+                    }
+                    "settings" -> if (!s.menuOpen || s.menuPage != MenuPage.MAIN) setMenu(true)
+                    else -> if (s.menuOpen) setMenu(false)
+                }
+            TmEvent.Recall -> {
+                TmLog.i("WINDOW recall asked")
+                set { it.copy(recallSerial = it.recallSerial + 1) }
+            }
             is TmEvent.CapsuleSource -> onCapsule(e.source)
             TmEvent.AutoPlace -> autoPlaceAndGo()
             TmEvent.Start -> onStart()
@@ -674,6 +691,45 @@ class TmViewModel(private val store: SettingsStore, private val anchors: AnchorG
     }
 
     // ---- menu, home
+
+    /**
+     * How loud each source is right now for the window's sound grid: 0 - 5 lit dots from the slewed gain against the
+     * source's level table (0 while the group is silent: quiet, mute, ending). Main thread.
+     */
+    fun liveLevels(): Map<SourceId, Int> {
+        val silent = engine.group < 0.01f || engine.muted
+        return SourceId.entries.associateWith { id ->
+            if (silent) 0
+            else {
+                val g = engine.gainDb[id] ?: Engine.NEG_INF
+                (0..4).count { g >= Sources[id].gainDb(it) - 0.5f }
+            }
+        }
+    }
+
+    private var stages = 0
+
+    /**
+     * A Stage started. The ViewModel is process-level (shared with the main window, TmShared): a second Stage in the
+     * same process starts over from S01 like a cold start (anchors are loaded again once its scene is ready).
+     */
+    fun stageStarted() {
+        stages++
+        if (stages == 1) return
+        TmLog.i("STAGE again: back to S01")
+        autoJob?.cancel()
+        guideJob?.cancel()
+        pinnedJob?.cancel()
+        engine.enter(Mode.SILENT)
+        engine.clearTask()
+        engine.clearUnloads()
+        engine.paused = false
+        sceneReady = false
+        loadStarted = false
+        val st = s
+        _state.value = TmUiState(language = st.language, intensity = st.intensity, muted = st.muted, room = st.room, audio = st.audio)
+        logState("restart")
+    }
 
     private fun setMenu(open: Boolean) {
         engine.paused = open

@@ -2,42 +2,28 @@ package io.embodit.toomuch.ui.tm.scene
 
 import io.embodit.toomuch.domain.model.SourceId
 
-/** Ids and dp sizes of every attachment panel (design `panels`); the Compose side declares exactly these, once. */
+/**
+ * Ids and dp sizes of the Stage's attachment panels; the Compose side declares exactly these, once. Since v0.1.1
+ * every page is in the main system window: the Stage keeps only the source labels (world text) and the
+ * "open panel" chip that brings the window back after its × (with "Quiet now" beside it).
+ */
 object PanelSpec {
-    const val BODY = "body"
-    const val FRONT = "front"
-    const val UNLOAD = "unload"
-    const val MENU = "menu"
-    const val ROOM_TAG = "roomTag"
+    /** "Open panel" + "Quiet now" while the window is closed; "look straight ahead" while an open waits (D9). */
+    const val OPEN = "open"
 
     /** One name label per source card (world text: design `spatialUiMap.worldText`). */
     fun label(id: SourceId) = "label:${id.tag}"
 
-    val BODY_SIZE = 400f to 464f
-    val FRONT_SIZE = 560f to 520f
-    val UNLOAD_SIZE = 360f to 280f
-    val MENU_SIZE = 400f to 480f
+    val OPEN_SIZE = 520f to 88f
     val LABEL_SIZE = 240f to 56f
-    val ROOM_TAG_SIZE = 360f to 56f
 
-    const val BODY_SCALE = 0.75f
-    const val FRONT_SCALE = 0.75f
-    const val UNLOAD_SCALE = 0.7f
-    const val MENU_SCALE = 0.75f
+    const val OPEN_SCALE = 0.75f
 
     val labels: List<String> = SourceId.entries.map { label(it) }
 
-    val pool: List<String> = listOf(BODY, FRONT, UNLOAD, MENU, ROOM_TAG) + labels
+    val pool: List<String> = listOf(OPEN) + labels
 
-    fun size(id: String): Pair<Float, Float> =
-        when (id) {
-            BODY -> BODY_SIZE
-            FRONT -> FRONT_SIZE
-            UNLOAD -> UNLOAD_SIZE
-            MENU -> MENU_SIZE
-            ROOM_TAG -> ROOM_TAG_SIZE
-            else -> LABEL_SIZE
-        }
+    fun size(id: String): Pair<Float, Float> = if (id == OPEN) OPEN_SIZE else LABEL_SIZE
 
     /** Half width / height of a panel in metres at [scale]. */
     fun halfM(id: String, scale: Float): Pair<Float, Float> {

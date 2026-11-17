@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,14 +34,19 @@ import com.pico.spatial.ui.design.PicoTheme
 import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.foundation.material.backgroundMaterial
 import com.pico.spatial.ui.platform.Material
+import io.embodit.toomuch.platform.TmLog
+import io.embodit.toomuch.ui.tm.debug.LocalProbePanel
 import io.embodit.toomuch.ui.tm.debug.probe
 import io.embodit.toomuch.ui.theme.TmColors
 import java.util.Locale
 
 /** Panel padding and the corner radius of the glass (design: Material.Regular root, 32 dp corners). */
 internal val PanelPadding = 16.dp
-internal val KeyWidth = 56.dp
-internal val KeyHeight = 48.dp
+internal val KeyWidth = 64.dp
+internal val KeyHeight = 64.dp
+
+/** Two columns across the main window's 544 dp content width (capsules, step buttons, the sound grid). */
+internal val CapsuleWidth = 264.dp
 
 /** Glass root of a panel: clipped shape, Material.Regular, padding. */
 @Composable
@@ -77,6 +83,22 @@ internal object TmType {
         @Composable get() = PicoTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold)
 }
 
+/**
+ * Overflow check of a fixed-line text (factory D13): logs `OVERFLOW <panel>/<text>` once when the text does not fit,
+ * so QA can run every state in English and read the log instead of hunting for ellipses.
+ */
+@Composable
+internal fun fits(text: String): (TextLayoutResult) -> Unit {
+    val panel = LocalProbePanel.current
+    return { r -> if (r.hasVisualOverflow && OverflowSeen.add("$panel/$text")) TmLog.i("OVERFLOW $panel/${text.take(48)}") }
+}
+
+private object OverflowSeen {
+    private val seen = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    fun add(key: String): Boolean = seen.add(key)
+}
+
 /** `m:ss` of a number of seconds. */
 internal fun fmtTime(seconds: Float): String {
     val s = seconds.toInt().coerceAtLeast(0)
@@ -87,7 +109,7 @@ internal fun fmt1(v: Float): String = String.format(Locale.US, "%.1f", v)
 
 internal fun fmt2(v: Float): String = String.format(Locale.US, "%.2f", v)
 
-/** A 56 x 48 icon key (more, back, close, delete, pause, stop). */
+/** A 64 x 64 icon key (room steppers; profile B31). */
 @Composable
 internal fun Key(name: String, iconRes: Int, description: String, enabled: Boolean = true, onClick: () -> Unit) {
     val content = if (enabled) PicoTheme.colorScheme.labelPrimaryLight else PicoTheme.colorScheme.labelQuaternary
@@ -103,8 +125,8 @@ internal fun Key(name: String, iconRes: Int, description: String, enabled: Boole
 }
 
 /**
- * A worded button: capsule, 48 dp high. [primary] = white fill with ink text (the confirming action),
- * [danger] = error fill with ink text; otherwise the tertiary fill with glass text.
+ * A worded button: capsule, 64 dp high (profile B31). [primary] = white fill with ink text (the confirming action),
+ * [danger] = error fill with white text; otherwise the tertiary fill with glass text.
  */
 @Composable
 internal fun WordButton(
@@ -135,7 +157,9 @@ internal fun WordButton(
         when {
             // a disabled button often carries an instruction ("Press Quiet now once first"): keep it legible
             !enabled -> PicoTheme.colorScheme.labelSecondary
-            primary || danger || selected -> TmColors.Ink
+            // white on the error red like Quiet now (5.0:1); ink on it read faint on the emulator
+            danger -> TmColors.White
+            primary || selected -> TmColors.Ink
             onInk -> TmColors.White
             else -> PicoTheme.colorScheme.labelPrimary
         }
@@ -145,7 +169,7 @@ internal fun WordButton(
     Button(
         onClick = action,
         modifier = modifier.probe(name, action),
-        size = ButtonDefaults.Regular.copy(height = 48.dp, minWidth = minWidth),
+        size = ButtonDefaults.Regular.copy(height = 64.dp, minWidth = minWidth),
         shape = CircleShape,
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
     ) {
@@ -153,7 +177,7 @@ internal fun WordButton(
             Icon(painter = painterResource(iconRes), contentDescription = null, modifier = Modifier.size(20.dp), tint = content)
             Spacer(modifier = Modifier.width(8.dp))
         }
-        Text(text = text, color = content, maxLines = 1, overflow = TextOverflow.Ellipsis, style = TmType.title)
+        Text(text = text, color = content, maxLines = 1, overflow = TextOverflow.Ellipsis, style = TmType.title, onTextLayout = fits(text))
     }
 }
 
@@ -182,7 +206,7 @@ internal fun BigButton(
     ) {
         Icon(painter = painterResource(iconRes), contentDescription = null, modifier = Modifier.size(32.dp), tint = iconTint?.takeIf { enabled } ?: content)
         Spacer(modifier = Modifier.width(12.dp))
-        Text(text = text, color = content, style = TmType.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(text = text, color = content, style = TmType.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), onTextLayout = fits(text))
         if (sub.isNotEmpty()) {
             Text(text = sub, color = if (enabled) PicoTheme.colorScheme.labelSecondary else PicoTheme.colorScheme.labelQuaternary, style = TmType.figure, maxLines = 1, softWrap = false)
         }
@@ -194,18 +218,18 @@ internal fun BigButton(
 internal fun TitleRow(title: String, leading: (@Composable () -> Unit)? = null, trailing: (@Composable () -> Unit)? = null) {
     Row(modifier = Modifier.fillMaxWidth().height(KeyHeight), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (leading != null) leading()
-        Text(text = title, color = PicoTheme.colorScheme.labelPrimary, style = TmType.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(text = title, color = PicoTheme.colorScheme.labelPrimary, style = TmType.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), onTextLayout = fits(title))
         if (trailing != null) trailing()
     }
 }
 
 
 /**
- * A capsule of the body panel's 2 x 3 area (176 x 48): icon, short label, a status mark on the right.
+ * A capsule of the window's 2 x 3 area (264 x 64, profile B31): icon, short label, a status mark on the right.
  * [selected] = interaction fill with ink content (the current one); [done] shows a tick.
  */
 @Composable
-internal fun Capsule(name: String, text: String, iconRes: Int?, onClick: () -> Unit, selected: Boolean = false, done: Boolean = false, open: Boolean = false, enabled: Boolean = true) {
+internal fun Capsule(name: String, text: String, iconRes: Int?, onClick: () -> Unit, selected: Boolean = false, done: Boolean = false, open: Boolean = false, enabled: Boolean = true, width: Dp = CapsuleWidth) {
     val container = if (selected) PicoTheme.colorScheme.interaction else PicoTheme.colorScheme.fillTertiary
     val content =
         when {
@@ -215,8 +239,8 @@ internal fun Capsule(name: String, text: String, iconRes: Int?, onClick: () -> U
         }
     Button(
         onClick = onClick,
-        modifier = Modifier.width(176.dp).height(48.dp).probe(name, onClick),
-        size = ButtonDefaults.Regular.copy(height = 48.dp, minWidth = 176.dp),
+        modifier = Modifier.width(width).height(64.dp).probe(name, onClick),
+        size = ButtonDefaults.Regular.copy(height = 64.dp, minWidth = width),
         shape = CircleShape,
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
@@ -225,7 +249,7 @@ internal fun Capsule(name: String, text: String, iconRes: Int?, onClick: () -> U
             Icon(painter = painterResource(iconRes), contentDescription = null, modifier = Modifier.size(24.dp), tint = content)
             Spacer(modifier = Modifier.width(6.dp))
         }
-        Text(text = text, color = content, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, style = PicoTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        Text(text = text, color = content, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, style = PicoTheme.typography.labelLarge, modifier = Modifier.weight(1f), onTextLayout = fits(text))
         when {
             done -> Icon(painter = painterResource(io.embodit.toomuch.R.drawable.ic_check), contentDescription = null, modifier = Modifier.size(18.dp), tint = if (selected) TmColors.Ink else PicoTheme.colorScheme.passable)
             open -> Icon(painter = painterResource(io.embodit.toomuch.R.drawable.ic_circle), contentDescription = null, modifier = Modifier.size(16.dp), tint = content)
@@ -233,9 +257,9 @@ internal fun Capsule(name: String, text: String, iconRes: Int?, onClick: () -> U
     }
 }
 
-/** A full-width option button that may wrap to two lines (unload options, design: 56 dp when long). */
+/** A full-width option button that may wrap to two lines (unload options; 64 dp, profile B31). */
 @Composable
-internal fun OptionButton(name: String, text: String, onClick: () -> Unit, modifier: Modifier = Modifier, height: Dp = 48.dp, primary: Boolean = false) {
+internal fun OptionButton(name: String, text: String, onClick: () -> Unit, modifier: Modifier = Modifier, height: Dp = 64.dp, primary: Boolean = false) {
     val container = if (primary) PicoTheme.colorScheme.labelPrimaryLight else PicoTheme.colorScheme.fillTertiary
     val content = if (primary) TmColors.Ink else PicoTheme.colorScheme.labelPrimary
     Button(
@@ -245,6 +269,6 @@ internal fun OptionButton(name: String, text: String, onClick: () -> Unit, modif
         shape = RoundedCornerShape(20.dp),
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
     ) {
-        Text(text = text, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis, style = PicoTheme.typography.labelLarge)
+        Text(text = text, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis, style = PicoTheme.typography.labelLarge, onTextLayout = fits(text))
     }
 }

@@ -25,8 +25,10 @@ data class TraySpot(val x: Float, val z: Float, val yaw: Float = 0f)
 
 /** Item sizes (x, y, z) in metres. */
 object TrayLayout {
-    const val BOARD_W = 0.80f
-    const val BOARD_D = 0.50f
+    // v0.1.2 (QA #2 q2-2, D17): every item footprint >= 5 cm from every other one in all four seeds
+    // (TrayLayoutTest), so the board grew from 0.80 x 0.50 and the items took real-life sizes.
+    const val BOARD_W = 0.90f
+    const val BOARD_D = 0.56f
     const val BOARD_T = 0.02f
     const val LIFT_M = 0.10f
     const val LIFT_S = 0.4f
@@ -37,41 +39,45 @@ object TrayLayout {
     /** A tap without a hold lifts the item for this long (the emulator mouse cannot hold a pinch). */
     const val PEEK_S = 1.7f
 
+    /** Minimum gap between two item footprints on the board (D17: >= 1.5 cm and >= 0.3 x target; QA asked 5 cm). */
+    const val MIN_GAP_M = 0.05f
+
+    /** Width (x), height, depth (z) in metres; candidates fit a 0.20 x 0.12 slot. */
     val size: Map<ItemId, Triple<Float, Float, Float>> =
         mapOf(
-            ItemId.ENVELOPE1 to Triple(0.22f, 0.005f, 0.11f),
-            ItemId.ENVELOPE2 to Triple(0.22f, 0.005f, 0.11f),
-            ItemId.NOTEBOOK to Triple(0.18f, 0.015f, 0.12f),
-            ItemId.SCARF to Triple(0.25f, 0.04f, 0.15f),
+            ItemId.ENVELOPE1 to Triple(0.19f, 0.006f, 0.10f),
+            ItemId.ENVELOPE2 to Triple(0.19f, 0.006f, 0.10f),
+            ItemId.NOTEBOOK to Triple(0.17f, 0.016f, 0.12f),
+            ItemId.SCARF to Triple(0.20f, 0.035f, 0.12f),
             ItemId.MUG to Triple(0.08f, 0.095f, 0.08f),
-            ItemId.GLASSES to Triple(0.14f, 0.03f, 0.04f),
-            ItemId.BOOK to Triple(0.18f, 0.03f, 0.12f),
-            ItemId.REMOTE to Triple(0.16f, 0.02f, 0.045f),
-            ItemId.KEYS to Triple(0.09f, 0.01f, 0.06f),
+            ItemId.GLASSES to Triple(0.14f, 0.03f, 0.045f),
+            ItemId.BOOK to Triple(0.16f, 0.03f, 0.11f),
+            ItemId.REMOTE to Triple(0.15f, 0.02f, 0.045f),
+            ItemId.KEYS to Triple(0.09f, 0.012f, 0.06f),
         )
 
-    /** The four candidate slots; the seed only permutes which candidate lies where. */
-    val candidateSlots = listOf(TraySpot(-0.27f, -0.10f), TraySpot(-0.06f, -0.13f), TraySpot(-0.26f, 0.13f), TraySpot(-0.05f, 0.12f))
+    /** The four candidate slots (2 x 2 on the left half); the seed only permutes which candidate lies where. */
+    val candidateSlots = listOf(TraySpot(-0.33f, -0.17f), TraySpot(-0.08f, -0.17f), TraySpot(-0.33f, 0.00f), TraySpot(-0.08f, 0.00f))
 
-    /** Start spots of the other items. */
+    /** Start spots of the other items: the mug right of the back row, book / remote / glasses along the front. */
     val fixedSpots: Map<ItemId, TraySpot> =
         mapOf(
-            ItemId.MUG to TraySpot(0.11f, -0.15f),
-            ItemId.GLASSES to TraySpot(0.12f, 0.00f, 0.25f),
-            ItemId.BOOK to TraySpot(0.10f, 0.16f, -0.2f),
-            ItemId.REMOTE to TraySpot(-0.06f, 0.00f, 0.1f),
+            ItemId.MUG to TraySpot(0.11f, -0.17f),
+            ItemId.GLASSES to TraySpot(0.07f, 0.155f),
+            ItemId.BOOK to TraySpot(-0.34f, 0.175f),
+            ItemId.REMOTE to TraySpot(-0.13f, 0.155f),
         )
 
-    /** The three outlines on the right (mug Ø 0.09, glasses 0.14 x 0.05, book 0.18 x 0.12). */
+    /** The three outlines on the right strip (x >= 0.25). */
     val returnFrames: Map<ItemId, TraySpot> =
         mapOf(
-            ItemId.MUG to TraySpot(0.29f, -0.15f),
-            ItemId.GLASSES to TraySpot(0.29f, -0.02f),
-            ItemId.BOOK to TraySpot(0.29f, 0.14f),
+            ItemId.MUG to TraySpot(0.33f, -0.17f),
+            ItemId.GLASSES to TraySpot(0.33f, -0.04f),
+            ItemId.BOOK to TraySpot(0.33f, 0.14f),
         )
 
-    /** The key hook, at the left back corner. */
-    val hook = TraySpot(-0.36f, -0.21f)
+    /** The key hook, at the back between the mug and its outline. */
+    val hook = TraySpot(0.21f, -0.25f)
 
     private val candidates = listOf(ItemId.NOTEBOOK, ItemId.SCARF, ItemId.ENVELOPE1, ItemId.ENVELOPE2)
 
@@ -215,6 +221,10 @@ class TrayTask(val seed: Int, val quiet: Boolean) {
     val isDragging: Boolean
         get() = dragging
 
+    /** The keys are showing under their candidate and not yet tapped: that candidate stays lifted off them. */
+    val keysWaiting: Boolean
+        get() = items[ItemId.KEYS]?.let { it.visible && !it.hung } == true && keyFlyT < 0f
+
     /** Live drag: [x], [z] tray-local (the ray on the board, or the system drag mapped onto it). */
     fun dragTo(x: Float, z: Float, level: Int) {
         val id = held ?: return
@@ -272,7 +282,7 @@ class TrayTask(val seed: Int, val quiet: Boolean) {
         // lifts ease up while held (not while dragged flat), down otherwise
         for (item in items.values) {
             if (item.id == ItemId.KEYS) continue
-            val up = item.id == held && !dragging
+            val up = (item.id == held && !dragging) || (item.id == keyUnder && keysWaiting)
             val rate = TrayLayout.LIFT_M / TrayLayout.LIFT_S
             item.lift = if (up) (item.lift + rate * dt).coerceAtMost(TrayLayout.LIFT_M) else (item.lift - rate * dt).coerceAtLeast(0f)
             if (item.backT >= 0f) {
@@ -293,8 +303,10 @@ class TrayTask(val seed: Int, val quiet: Boolean) {
                     keyUnder = id
                     val key = items[ItemId.KEYS]!!
                     key.visible = true
+                    // v0.1.2: the keys lie in the candidate's own footprint (no new neighbour closer than the
+                    // layout's 5 cm); the candidate stays lifted above them until they are tapped (keysWaiting)
                     key.x = item.rest.x
-                    key.z = (item.rest.z + 0.09f).coerceAtMost(TrayLayout.BOARD_D / 2f - 0.04f)
+                    key.z = item.rest.z
                     key.yaw = 0.3f
                     events += TaskEvent.Revealed(id)
                 }

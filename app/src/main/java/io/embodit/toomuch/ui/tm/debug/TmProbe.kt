@@ -47,6 +47,9 @@ object TmProbe {
 
         /** Presses a panel control by its stable name; false when no such control is composed. */
         fun pressControl(name: String): Boolean
+
+        /** The main window: `open` (through the level gate), `close` (as its ×), `recall` ([Bring panel here]). */
+        fun window(cmd: String)
     }
 
     interface SceneProbe {
@@ -57,8 +60,6 @@ object TmProbe {
         fun panelLines(): List<String>
 
         fun poseLine(): String
-
-        fun parkPanel(): String
 
         fun setUvTest(on: Boolean): String
     }

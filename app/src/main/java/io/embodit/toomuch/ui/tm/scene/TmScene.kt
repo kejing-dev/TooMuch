@@ -39,7 +39,7 @@ import io.embodit.toomuch.platform.audio.PoolSoundOut
 import io.embodit.toomuch.platform.audio.SoundOut
 import io.embodit.toomuch.platform.input.ControllerSample
 import io.embodit.toomuch.platform.tracking.HeadPose
-import io.embodit.toomuch.ui.tm.MenuPage
+import io.embodit.toomuch.ui.tm.TmShared
 import io.embodit.toomuch.ui.tm.Screen
 import io.embodit.toomuch.ui.tm.TaskStage
 import io.embodit.toomuch.ui.tm.TmEvent
@@ -49,6 +49,7 @@ import io.embodit.toomuch.ui.tm.debug.TmProbe
 import io.embodit.toomuch.ui.theme.TmColors
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.asin
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.CancellationException
@@ -113,8 +114,6 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
     private var attached = false
     private var nextFrame: CompletableDeferred<Unit>? = null
 
-    private val bodyFollower = Follower("body", BODY_OFFSET, BODY_LEAN)
-
     private var ui = TmUiState()
     private var head = HeadPose(Vec3.ZERO, Quat4.IDENTITY)
     private var hasHead = false
@@ -124,10 +123,8 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
     private var lastStateMs = 0L
     private var stateLines = false
     private var lastSerial = -1
-    private var frontPlaced = false
-    private var lastFront: Any? = null
-    private var panelPressed = false
-    private var lastPanelPressMs = NEVER
+    private var chipPose: Pair<Vec3, Quat4>? = null
+    private var hintShown = false
     private var paused = false
 
     // controller
@@ -144,10 +141,8 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
     private var dragLocal = Vec3.ZERO
     private var dragMoved = false
 
-    fun onPanelPointer(pressed: Boolean) {
-        panelPressed = pressed
-        lastPanelPressMs = SystemClock.elapsedRealtime()
-    }
+    /** Hand travel since the press, summed from the per-event dragAmount deltas (SDK 6.1.9 sends increments). */
+    private var dragTravelPx = 0f
 
     // =========================================================================================
     // lifecycle
@@ -182,7 +177,7 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
         TmGraph.anchors.start()
         ActiveScene.scene = this
         bindPanels(attachments)
-        bodyFollower.reset()
+        chipPose = null
         buildJob =
             scope.launch {
                 try {
@@ -324,12 +319,6 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
             lastSerial = state.traySerial
             state.tray?.let { tray?.place(it) }
         }
-        val front = state.front
-        if (front != lastFront) {
-            lastFront = front
-            frontPlaced = false
-        }
-        syncPanels(state)
     }
 
     private fun switchSound(name: String) {
@@ -339,14 +328,6 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
         scope.launch {
             while (sound?.loadNext() == true) frame()
         }
-    }
-
-    private fun syncPanels(state: TmUiState) {
-        val rig = rig ?: return
-        if (!state.menuOpen) rig[PanelSpec.MENU]?.hide()
-        if (state.front == null) rig[PanelSpec.FRONT]?.hide()
-        if (state.cardFor == null) rig[PanelSpec.UNLOAD]?.hide()
-        if (!(state.menuOpen && state.menuPage == MenuPage.ROOM)) rig[PanelSpec.ROOM_TAG]?.hide()
     }
 
     // =========================================================================================
@@ -371,11 +352,10 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
         rig.onFrame(now)
         if (hasHead) rig.stowBehind(head)
         val state = ui
-        if (hasHead && head.position.length > 1e-3f) {
-            val hold = panelPressed || (lastPanelPressMs != NEVER && now - lastPanelPressMs < PANEL_HOLD_MS) || state.menuOpen
-            bodyFollower.follow(head, now, hold)
-            placeBodyFamily(state, rig)
-        }
+        // the main window opens only with a level head (D9): the gate gets the pitch every frame
+        val headOk = hasHead && head.position.length > 1e-3f
+        TmShared.stepGate(now, if (headOk) Math.toDegrees(asin(head.forward.y.coerceIn(-1f, 1f)).toDouble()).toFloat() else null)
+        if (headOk) placeChip(rig, now) else rig[PanelSpec.OPEN]?.hide()
         if (hasHead && now - lastHeadSentMs >= HEAD_SAMPLE_MS) {
             lastHeadSentMs = now
             sink(TmEvent.HeadSample(head.position, head.forward))
@@ -446,6 +426,8 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
         room.sync(state.room, frame, spots)
         room.showLines(state.roomLinesShown)
         val pinning = state.screen == Screen.PINNING
+        // D24: the room faces take taps only while pinning (the placement tool), never otherwise
+        room.setPinnable(pinning && !state.menuOpen)
         room.showFrames(pinning, if (pinning) state.adjusting ?: state.current else null, state.pinned.keys, now / 1000f)
     }
 
@@ -655,33 +637,47 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
 
     // ---- panels
 
-    private fun placeBodyFamily(state: TmUiState, rig: PanelRig) {
-        val pose = bodyFollower.pose
-        val rot = bodyFollower.rotation
-        val k = PanelSpec.BODY_SCALE
-        rig[PanelSpec.BODY]?.place(pose.position, rot, k)
-        if (state.menuOpen) {
-            // stacked above the body panel, same depth: never in front of "Quiet now"
-            val (_, bh) = PanelSpec.halfM(PanelSpec.BODY, k)
-            val (_, mh) = PanelSpec.halfM(PanelSpec.MENU, PanelSpec.MENU_SCALE)
-            rig[PanelSpec.MENU]?.place(pose.position + rot.rotate(Vec3(0f, bh + 0.02f + mh, 0f)), rot, PanelSpec.MENU_SCALE)
+    /**
+     * The chip slot (PanelSpec.OPEN). While the main window is closed (its ×) or minimised: "Quiet now" + "Open panel"
+     * 0.8 m away, 12 degrees below the eyes and 25 degrees left (the tray is ahead and below), yaw only; placed when it
+     * appears, again only if it ends up more than 70 degrees off the view. While an open waits for a level head
+     * (TmShared.levelHint): "look straight ahead" on the line of sight (pitch clamped to 40 degrees), 0.75 m, upright.
+     */
+    private fun placeChip(rig: PanelRig, now: Long) {
+        val slot = rig[PanelSpec.OPEN] ?: return
+        val lh = LevelHead.of(head.position, head.forward)
+        if (TmShared.levelHint) {
+            if (!hintShown) TmLog.i("PANEL level hint shown")
+            hintShown = true
+            chipPose = null
+            val pitch = asin(head.forward.y.coerceIn(-1f, 1f)).coerceIn(-HINT_PITCH_MAX_RAD, HINT_PITCH_MAX_RAD)
+            val p = head.position + lh.ahead * (HINT_DIST_M * cos(pitch)) + Vec3(0f, HINT_DIST_M * sin(pitch), 0f)
+            slot.place(p, Quat4.axisAngle(Vec3.UP, lh.yaw), PanelSpec.OPEN_SCALE)
+            return
         }
+        if (hintShown) {
+            hintShown = false
+            TmLog.i("PANEL level hint hidden")
+        }
+        val opening = TmShared.openWaiting || now - TmShared.openedMs < CHIP_AFTER_OPEN_MS
+        if (!TmShared.windowClosed || TmShared.recallPending || opening) {
+            if (chipPose != null) TmLog.i("PANEL chip hidden (window ${TmShared.window})")
+            chipPose = null
+            slot.hide()
+            return
+        }
+        val cp = chipPose
+        if (cp == null || abs(lh.anglesOf(cp.first).first) > 70f) {
+            val az = Math.toRadians(CHIP_AZ_DEG.toDouble()).toFloat()
+            val at = lh.at(CHIP_AZ_DEG, CHIP_EL_DEG, CHIP_DIST_M)
+            chipPose = at to Quat4.axisAngle(Vec3.UP, lh.yaw - az)
+            TmLog.i("PANEL chip at=${TmLog.pos(at)} (window ${TmShared.window})")
+        }
+        val p = chipPose!!
+        slot.place(p.first, p.second, PanelSpec.OPEN_SCALE)
     }
 
     private fun placeWorldPanels(state: TmUiState, rig: PanelRig) {
-        // front card: once per layout, at the head's level pose of that moment (D9)
-        val front = state.front
-        if (front != null && !frontPlaced && hasHead) {
-            frontPlaced = true
-            val lh = LevelHead.of(head.position, head.forward)
-            // over the tray (both 0.9 m ahead) the card rises to just under eye level so it clears the things on it
-            val at = Placement.frontCard(lh).let { if (state.trayShown) Vec3(it.x, head.position.y - FRONT_OVER_TRAY_DROP_M, it.z) else it }
-            rig[PanelSpec.FRONT]?.show(at, PanelSpec.FRONT_SCALE)
-            TmLog.i("PANEL front ${front.name.lowercase(Locale.US)} at=${TmLog.pos(at)} overTray=${state.trayShown}")
-        }
-        // unload card where the ViewModel put it
-        val cp = state.cardPos
-        if (state.cardFor != null && cp != null) rig[PanelSpec.UNLOAD]?.show(cp, PanelSpec.UNLOAD_SCALE)
         // name labels above the cards, world text sized by distance (2.5 cm at 1 m, up to 6 cm)
         for (id in SourceId.entries) {
             val slot = rig[PanelSpec.label(id)] ?: continue
@@ -696,12 +692,6 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
             val k = textM / LABEL_TEXT_AT_SCALE1_M
             val (_, hh) = PanelSpec.halfM(PanelSpec.label(id), k)
             slot.show(p!!.position + Vec3(0f, 0.09f + hh, 0f), k)
-        }
-        // room size tag on the front wall while the room page is open
-        val frame = state.roomFrame
-        if (state.menuOpen && state.menuPage == MenuPage.ROOM && frame != null) {
-            val at = frame.toStage(Vec3(0f, state.room.floorOffset + 1.4f, -state.room.length / 2f + 0.05f))
-            rig[PanelSpec.ROOM_TAG]?.show(at, 2.0f)
         }
     }
 
@@ -772,6 +762,7 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
                 engine.userActed()
                 dragItem = item
                 dragMoved = false
+                dragTravelPx = 0f
                 val it = task.items[item]
                 dragLocal = Vec3(it?.x ?: 0f, 0f, it?.z ?: 0f)
                 val dist = head.position.distanceTo(pose.center).coerceAtLeast(0.3f)
@@ -780,10 +771,12 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
             }
             "move" -> {
                 if (dragItem == null) return
+                // dragAmount is this event's increment: sum it (the travel decides tap vs drag, the board position below)
                 val a = value.dragAmount
-                if (abs(a.x) + abs(a.y) > 2f) dragMoved = true
+                dragTravelPx += value.dragAmount.let { abs(it.x) + abs(it.y) }
+                if (dragTravelPx > 2f) dragMoved = true
                 if (!task.isDragging) return
-                // view right -> tray x, view up -> away from the user (tray -z)
+                // view right -> tray x, view up -> away from the user (tray -z); dragLocal accumulates the increments
                 dragLocal = Vec3(dragLocal.x + a.x * dragPxToM, 0f, dragLocal.z - (-a.y) * dragPxToM)
                 task.dragTo(dragLocal.x, dragLocal.z, if (state.screen == Screen.TASK) engine.level() else 0)
             }
@@ -845,12 +838,6 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
 
     override fun poseLine(): String = "POSE hmd pos=${TmLog.pos5(head.position)} ${TmLog.quat5(head.rotation)} fwd=${TmLog.pos5(head.forward)} valid=$hasHead input=${ui.input} controller=${controllerSeenMs != NEVER}"
 
-    override fun parkPanel(): String {
-        bodyFollower.park(head, SystemClock.elapsedRealtime())
-        frontPlaced = false
-        return "FOLLOW body park requested"
-    }
-
     override fun setUvTest(on: Boolean): String {
         uvTest = on
         return "UVTEST $on (card faces show F↑)"
@@ -861,12 +848,16 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
         private const val REBIND_DELAY_MS = 150L
         private const val HEAD_SAMPLE_MS = 100L
         private const val AUDIO_MS = 100L
-        private const val PANEL_HOLD_MS = 600L
+        private const val CHIP_AFTER_OPEN_MS = 6000L
+        private const val CHIP_AZ_DEG = -25f
+        private const val CHIP_EL_DEG = -12f
+        private const val CHIP_DIST_M = 0.8f
+        private const val HINT_DIST_M = 0.75f
+        private val HINT_PITCH_MAX_RAD = Math.toRadians(40.0).toFloat()
         private const val BLOCK_GRACE_MS = 3000L
         private const val CONTROLLER_GONE_MS = 2000L
         private const val TRIGGER_ON = 0.6f
         private const val SEE_THROUGH_M = 0.3f
-        private const val FRONT_OVER_TRAY_DROP_M = 0.02f
         private const val PX_M = 0.0004f
         private const val LABEL_TEXT_M = 0.025f
         private const val LABEL_TEXT_MAX_M = 0.06f
@@ -875,17 +866,6 @@ class TmScene(private val vm: TmViewModel) : TmProbe.SceneProbe {
         private const val LABEL_TEXT_AT_SCALE1_M = 0.0224f
         private val RING_COUNT = intArrayOf(1, 1, 2, 2, 3)
         private val LABEL_SCREENS = setOf(Screen.ROOM_READY, Screen.PINNING, Screen.BASELINE, Screen.TASK, Screen.UNLOAD, Screen.REDO, Screen.ENDING, Screen.INTRO, Screen.INTRO_ARMED, Screen.QUIET)
-
-        /** Body panel: 40 deg left, 13 deg down, 0.8 m (level head frame), leaning back 10 deg. */
-        val BODY_OFFSET =
-            Vec3(
-                -(sin(Math.toRadians(40.0)) * cos(Math.toRadians(13.0)) * 0.8).toFloat(),
-                -(sin(Math.toRadians(13.0)) * 0.8).toFloat(),
-                -(cos(Math.toRadians(40.0)) * cos(Math.toRadians(13.0)) * 0.8).toFloat(),
-            )
-
-        /** Turned to face the head (40 deg) and leaning back 10 deg. */
-        val BODY_LEAN: Quat4 = Quat4.axisAngle(Vec3.UP, Math.toRadians(40.0).toFloat()) * Quat4.axisAngle(Vec3.RIGHT, -Math.toRadians(10.0).toFloat())
 
         /** Slab test of a ray (origin, unnormalised direction) against an axis-aligned box. */
         fun rayBox(o: Vec3, d: Vec3, c: Vec3, h: Vec3): Float? {

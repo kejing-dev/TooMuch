@@ -96,10 +96,11 @@ object RoomRules {
         val hl = size.length / 2f
         val floor = size.floorOffset
         val ceil = floor + size.height
-        val tray = frame.headHeight - 0.30f
+        val tray = frame.headHeight - Placement.TRAY_BELOW
         return listOf(
             DefaultSpot(SourceId.FRIDGE, Vec3(hw - 0.45f, floor + 1.5f, -hl), Vec3(hw - 0.45f, floor + 0.85f, -hl), 0.6f, 1.7f, FrameShape.RECT, Vec3(0f, 0f, 1f)),
-            DefaultSpot(SourceId.CLOCK, Vec3(0f, floor + 1.9f, -hl), Vec3(0f, floor + 1.9f, -hl), 0.3f, 0.3f, FrameShape.CIRCLE, Vec3(0f, 0f, 1f)),
+            // 0.9 m left of the middle of the front wall: off the line to the main window (it opens 1.75 m straight ahead)
+            DefaultSpot(SourceId.CLOCK, Vec3(-0.9f, floor + 1.9f, -hl), Vec3(-0.9f, floor + 1.9f, -hl), 0.3f, 0.3f, FrameShape.CIRCLE, Vec3(0f, 0f, 1f)),
             DefaultSpot(SourceId.BAG, Vec3(-hw, floor + 0.6f, -0.6f), Vec3(-hw, floor + 0.6f, -0.6f), 0.4f, 0.5f, FrameShape.RECT, Vec3(1f, 0f, 0f)),
             DefaultSpot(SourceId.TAP, Vec3(hw, floor + 1.0f, 0f), Vec3(hw, floor + 1.0f, 0f), 0.3f, 0.3f, FrameShape.RECT, Vec3(-1f, 0f, 0f)),
             DefaultSpot(SourceId.LAMP, Vec3(0f, ceil, -1.2f), Vec3(0f, ceil, -1.2f), 1.2f, 0.15f, FrameShape.RECT, Vec3(0f, -1f, 0f)),

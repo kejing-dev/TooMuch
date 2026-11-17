@@ -8,9 +8,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -19,6 +24,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
 import com.pico.spatial.ui.design.CircularProgressDefaults
 import com.pico.spatial.ui.design.CircularProgressIndicator
@@ -36,7 +44,6 @@ import io.embodit.toomuch.domain.model.LanguagePref
 import io.embodit.toomuch.domain.model.SourceId
 import io.embodit.toomuch.domain.model.Sources
 import io.embodit.toomuch.ui.tm.FrontLayout
-import io.embodit.toomuch.ui.tm.MenuPage
 import io.embodit.toomuch.ui.tm.Screen
 import io.embodit.toomuch.ui.tm.TmEvent
 import io.embodit.toomuch.ui.tm.TmUiState
@@ -44,79 +51,85 @@ import io.embodit.toomuch.ui.tm.debug.probe
 import io.embodit.toomuch.ui.tm.scene.PanelSpec
 import java.util.Locale
 
+/*
+ * The sections of the main window's pages (v0.1.1): what used to be the front card, the unload card and the menu
+ * are parts of one system window now (factory native-window-move, taste D8 "one window"). No Glass of their own:
+ * the window is the glass.
+ */
+
 @Composable
-private fun Body(text: String, maxLines: Int = 4, bold: Boolean = false, italic: Boolean = false, color: Color = PicoTheme.colorScheme.labelPrimary) {
+private fun Body(text: String, maxLines: Int = 8, bold: Boolean = false, italic: Boolean = false, color: Color = PicoTheme.colorScheme.labelPrimary) {
     Text(
         text = text,
         color = color,
         style = PicoTheme.typography.bodyMedium.copy(fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal, fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal),
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
+        onTextLayout = fits(text),
     )
 }
 
-/** The one front card (design `panels.frontCard`, 560 x 520 at 0.75, fixed size): starting / intro / quiet / ending / about / unavailable / confirm. */
+/** An inline "are you sure" (factory D44: progress-losing entries ask first, in the same window). */
 @Composable
-internal fun FrontCard(state: TmUiState, filled: Boolean, onEvent: (TmEvent) -> Unit) {
-    val (w, h) = PanelSpec.FRONT_SIZE
-    Glass(w.dp, h.dp) {
-        if (!filled) return@Glass
+internal fun ConfirmBlock(question: String, cancel: String, ok: String, cancelName: String, okName: String, onCancel: () -> Unit, onOk: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = question, color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead, maxLines = 2, onTextLayout = fits(question))
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            WordButton(cancelName, cancel, onCancel, modifier = Modifier.width(220.dp), primary = true)
+            WordButton(okName, ok, onOk, modifier = Modifier.width(220.dp), danger = true)
+        }
+    }
+}
+
+/** The front layouts (starting / intro / quiet / ending / about / unavailable / forget-home confirmation). */
+@Composable
+internal fun FrontContent(state: TmUiState, onEvent: (TmEvent) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when (state.front) {
             FrontLayout.STARTING -> {
-                Text(text = rs(R.string.intro_title), color = PicoTheme.colorScheme.labelPrimary, style = TmType.headline)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = PicoTheme.colorScheme.labelPrimary, progressSize = CircularProgressDefaults.circleProgressSize(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
                     Body(rs(R.string.starting), 1)
                 }
+                Body(rs(R.string.starting_hint), 2, color = PicoTheme.colorScheme.labelSecondary)
+                Body(rs(R.string.intro_p1), 4, color = PicoTheme.colorScheme.labelSecondary)
             }
             FrontLayout.INTRO -> Intro(state, onEvent)
-            FrontLayout.QUIET -> {
-                Icon(painter = painterResource(R.drawable.ic_quiet), contentDescription = null, modifier = Modifier.size(48.dp), tint = PicoTheme.colorScheme.labelPrimary)
-                Text(text = rs(R.string.quiet_title), color = PicoTheme.colorScheme.labelPrimary, style = TmType.headline)
-                Body(rs(R.string.quiet_body), 2)
-                Spacer(modifier = Modifier.height(8.dp))
-                WordButton("quiet_continue", rs(R.string.btn_continue), { onEvent(TmEvent.Continue) }, modifier = Modifier.fillMaxWidth(), primary = true)
-                if (state.returnTo == Screen.TASK) WordButton("quiet_unload", rs(R.string.btn_goUnload), { onEvent(TmEvent.GoUnload) }, modifier = Modifier.fillMaxWidth())
-                WordButton("quiet_exit", rs(R.string.btn_exit), { onEvent(TmEvent.Exit) }, minWidth = 120.dp)
-            }
+            FrontLayout.QUIET -> Quiet(state, onEvent)
             FrontLayout.ENDING -> {
-                Text(text = rs(R.string.endingTitle), color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead, maxLines = 2)
                 val m = state.taskSeconds / 60
                 val sec = state.taskSeconds % 60
-                Body(state.quietSeconds?.let { rs(R.string.endingTimes, m, sec, it) } ?: rs(R.string.endingTimesSkipped, m, sec), 1)
+                Body(state.quietSeconds?.let { rs(R.string.endingTimes, m, sec, it) } ?: rs(R.string.endingTimesSkipped, m, sec), 2)
                 Text(text = rs(R.string.helpTitle), color = PicoTheme.colorScheme.labelSecondary, style = PicoTheme.typography.labelLarge)
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    for (id in listOf(R.string.help_1, R.string.help_2, R.string.help_3, R.string.help_4, R.string.help_5)) Body("· " + rs(id), 1)
+                // gate:allow button-gap five tip lines of text, not buttons (the buttons below are a Row spaced 16 dp)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (id in listOf(R.string.help_1, R.string.help_2, R.string.help_3, R.string.help_4, R.string.help_5)) Body("· " + rs(id), 2)
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    WordButton("end_again", rs(R.string.btn_again), { onEvent(TmEvent.Again) }, modifier = Modifier.width(240.dp), primary = true)
-                    WordButton("end_exit_card", rs(R.string.btn_exit), { onEvent(TmEvent.Exit) }, modifier = Modifier.width(160.dp))
+                    WordButton("end_again", rs(R.string.btn_again), { onEvent(TmEvent.Again) }, modifier = Modifier.width(200.dp), primary = true)
+                    WordButton("end_exit_card", rs(R.string.btn_exit), { onEvent(TmEvent.Exit) }, modifier = Modifier.width(140.dp))
+                    WordButton("end_about", rs(R.string.btn_about), { onEvent(TmEvent.About) }, modifier = Modifier.width(140.dp), iconRes = R.drawable.ic_info)
                 }
-                WordButton("end_about", rs(R.string.btn_about), { onEvent(TmEvent.About) }, minWidth = 120.dp, iconRes = R.drawable.ic_info)
             }
             FrontLayout.ABOUT -> {
                 Body(rs(R.string.about), 8)
                 Body(rs(R.string.about_sources), 6, color = PicoTheme.colorScheme.labelSecondary)
-                Body(rs(R.string.about_synth), 1)
+                Body(rs(R.string.about_synth), 2)
                 Body(rs(R.string.about_version, BuildConfig.VERSION_NAME), 1, color = PicoTheme.colorScheme.labelSecondary)
                 WordButton("about_ok", rs(R.string.btn_ok), { onEvent(TmEvent.AboutOk) }, modifier = Modifier.fillMaxWidth(), primary = true)
             }
             FrontLayout.UNAVAILABLE -> {
                 Icon(painter = painterResource(R.drawable.ic_warning), contentDescription = null, modifier = Modifier.size(48.dp), tint = PicoTheme.colorScheme.labelPrimary)
-                Text(text = rs(R.string.unavailable), color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead, maxLines = 3)
+                val t = rs(R.string.unavailable)
+                Text(text = t, color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead, maxLines = 3, onTextLayout = fits(t))
+                Body(rs(R.string.unavailable_hint), 3, color = PicoTheme.colorScheme.labelSecondary)
+                Body(rs(R.string.intro_p1), 4, color = PicoTheme.colorScheme.labelSecondary)
                 WordButton("unavail_exit", rs(R.string.btn_exit), { onEvent(TmEvent.Exit) }, modifier = Modifier.fillMaxWidth(), primary = true)
             }
-            FrontLayout.CONFIRM_CLEAR -> {
-                Text(text = rs(R.string.btn_clearHome), color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead)
-                Body(rs(R.string.clearConfirm), 3)
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    WordButton("clear_yes", rs(R.string.btn_forget), { onEvent(TmEvent.ConfirmClear) }, modifier = Modifier.width(240.dp), danger = true)
-                    WordButton("clear_no", rs(R.string.btn_cancel), { onEvent(TmEvent.CancelClear) }, modifier = Modifier.width(240.dp))
-                }
-            }
+            FrontLayout.CONFIRM_CLEAR ->
+                ConfirmBlock(rs(R.string.clearConfirm), rs(R.string.btn_cancel), rs(R.string.btn_forget), "clear_no", "clear_yes", { onEvent(TmEvent.CancelClear) }, { onEvent(TmEvent.ConfirmClear) })
             null -> Unit
         }
     }
@@ -125,20 +138,15 @@ internal fun FrontCard(state: TmUiState, filled: Boolean, onEvent: (TmEvent) -> 
 @Composable
 private fun Intro(state: TmUiState, onEvent: (TmEvent) -> Unit) {
     val armed = state.screen == Screen.INTRO_ARMED
-    Text(text = rs(R.string.intro_title), color = PicoTheme.colorScheme.labelPrimary, style = TmType.headline)
-    Body(rs(R.string.intro_p1), 4)
-    Body(rs(R.string.intro_p2), 3)
+    Body(rs(R.string.intro_p1))
+    Body(rs(R.string.intro_p2))
     Body(if (armed) rs(R.string.intro_p3armed) else rs(R.string.intro_p3), 2, bold = true)
-    Text(
-        text = if (state.input == InputMode.CONTROLLER) rs(R.string.intro_inputController) else rs(R.string.intro_inputHands),
-        color = PicoTheme.colorScheme.labelSecondary,
-        style = PicoTheme.typography.labelLarge,
-        maxLines = 1,
-    )
+    val input = if (state.input == InputMode.CONTROLLER) rs(R.string.intro_inputController) else rs(R.string.intro_inputHands)
+    Text(text = input, color = PicoTheme.colorScheme.labelSecondary, style = PicoTheme.typography.labelLarge, maxLines = 2, onTextLayout = fits(input))
     Segments(
         items = listOf("intro_gentle" to rs(R.string.intensity_gentle), "intro_standard" to rs(R.string.intensity_standard)),
         selected = state.intensity.ordinal,
-        width = 528.dp,
+        width = 544.dp,
         onSelect = { onEvent(TmEvent.IntensitySet(Intensity.entries[it])) },
     )
     WordButton(
@@ -151,10 +159,27 @@ private fun Intro(state: TmUiState, onEvent: (TmEvent) -> Unit) {
     )
 }
 
-/** A SegmentControl whose items share [width]. */
+/** The quiet card: continue, go unload (from the task), exit; leaving mid-run asks first. */
 @Composable
-internal fun Segments(items: List<Pair<String, String>>, selected: Int, width: androidx.compose.ui.unit.Dp, onSelect: (Int) -> Unit) {
+private fun Quiet(state: TmUiState, onEvent: (TmEvent) -> Unit) {
+    var confirmQuit by remember { mutableStateOf(false) }
+    val midRun = state.returnTo in setOf(Screen.BASELINE, Screen.TASK, Screen.UNLOAD, Screen.REDO)
+    Body(rs(R.string.quiet_body), 2)
+    Spacer(modifier = Modifier.height(4.dp))
+    if (confirmQuit) {
+        ConfirmBlock(rs(R.string.quit_confirm), rs(R.string.btn_cancel), rs(R.string.btn_exit), "quiet_exit_no", "quiet_exit_yes", { confirmQuit = false }, { onEvent(TmEvent.Exit) })
+        return
+    }
+    WordButton("quiet_continue", rs(R.string.btn_continue), { onEvent(TmEvent.Continue) }, modifier = Modifier.fillMaxWidth(), primary = true)
+    if (state.returnTo == Screen.TASK) WordButton("quiet_unload", rs(R.string.btn_goUnload), { onEvent(TmEvent.GoUnload) }, modifier = Modifier.fillMaxWidth())
+    WordButton("quiet_exit", rs(R.string.btn_exit), { if (midRun) confirmQuit = true else onEvent(TmEvent.Exit) }, modifier = Modifier.fillMaxWidth())
+}
+
+/** A SegmentControl whose items share [width] (options inside one row of a page, never to switch pages). */
+@Composable
+internal fun Segments(items: List<Pair<String, String>>, selected: Int, width: Dp, onSelect: (Int) -> Unit) {
     val itemW = (width - 8.dp) / items.size
+    // gate:allow tabs-segment two options of one setting inside a page row (language / intensity); pages switch with the native TabBar
     SegmentControl(modifier = Modifier.width(width).height(48.dp), backgroundColor = PicoTheme.colorScheme.fillTertiary) {
         items.forEachIndexed { i, (name, text) ->
             val onClick = { onSelect(i) }
@@ -209,84 +234,139 @@ private fun firstPerson(id: SourceId): Int =
         SourceId.PHONE -> R.string.fp_phone
     }
 
-/** The unload card (design `panels.unloadCard`, 360 x 280 at 0.7). */
+/** The unload card's content (design `panels.unloadCard`): the source, its first-person line, the options. */
 @Composable
-internal fun UnloadCard(state: TmUiState, filled: Boolean, onEvent: (TmEvent) -> Unit) {
-    val (w, h) = PanelSpec.UNLOAD_SIZE
-    Glass(w.dp, h.dp, corner = 28.dp) {
-        val id = state.cardFor
-        if (!filled || id == null) return@Glass
-        Row(modifier = Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(painter = painterResource(srcIcon(id)), contentDescription = null, modifier = Modifier.size(24.dp), tint = PicoTheme.colorScheme.labelPrimary)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(text = rs(longName(id)), color = PicoTheme.colorScheme.labelPrimary, style = TmType.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+internal fun UnloadContent(state: TmUiState, onEvent: (TmEvent) -> Unit) {
+    val id = state.cardFor ?: return
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(painter = painterResource(srcIcon(id)), contentDescription = null, modifier = Modifier.size(28.dp), tint = PicoTheme.colorScheme.labelPrimary)
+            Spacer(modifier = Modifier.width(10.dp))
+            val name = rs(longName(id))
+            Text(text = name, color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), onTextLayout = fits(name))
             Key("card_close", R.drawable.ic_close, rs(R.string.btn_close)) { onEvent(TmEvent.CloseCard) }
         }
         if (state.cardDone) {
-            Box(modifier = Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) { Body(rs(R.string.unloadDone), 2) }
+            Body(rs(R.string.unloadDone), 2)
             OptionButton("card_ok", rs(R.string.btn_ok), { onEvent(TmEvent.CloseCard) }, primary = true)
-            return@Glass
+            return@Column
         }
-        Box(modifier = Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) { Body(rs(firstPerson(id)), 2, italic = true) }
+        Body(rs(firstPerson(id)), 3, italic = true)
         val n = Sources[id].options.size
         for (i in 0 until n) {
             val text = rs(optionText(id, i))
-            OptionButton("card_opt$i", text, { onEvent(TmEvent.UnloadChoose(id, i)) }, height = if (text.length > 34) 56.dp else 48.dp)
+            OptionButton("card_opt$i", text, { onEvent(TmEvent.UnloadChoose(id, i)) }, height = 64.dp)
         }
     }
 }
 
-/** The menu (design `panels.menu`, 400 x 480 at 0.75), stacked above the body panel. */
+/** A label + control row of the settings page (>= 48 dp). */
 @Composable
-internal fun MenuPanel(state: TmUiState, filled: Boolean, onEvent: (TmEvent) -> Unit) {
-    val (w, h) = PanelSpec.MENU_SIZE
-    Glass(w.dp, h.dp) {
-        if (!filled) return@Glass
-        if (state.menuPage == MenuPage.ROOM) {
-            RoomPage(state, onEvent)
-            return@Glass
+private fun SettingRow(label: String, control: @Composable () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text = label, color = PicoTheme.colorScheme.labelPrimary, style = TmType.title, maxLines = 1, modifier = Modifier.weight(1f), onTextLayout = fits(label))
+        control()
+    }
+}
+
+/**
+ * The settings page (the old menu, design S13): language, intensity, reset around me + bring the panel here, re-pin,
+ * forget home, about; quitting is always last and asks in place (template D26).
+ */
+@Composable
+internal fun SettingsContent(state: TmUiState, onEvent: (TmEvent) -> Unit, onRecall: () -> Unit) {
+    var confirmQuit by remember { mutableStateOf(false) }
+    if (confirmQuit) {
+        // the question takes the page (with 64 dp rows the settings list has no room left under "Quit app"),
+        // spread over it with an icon and what is kept (QA #2 q2-3: the bare question left 39 % blank)
+        Column(modifier = Modifier.fillMaxWidth().fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly, horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(painter = painterResource(R.drawable.ic_exit), contentDescription = null, modifier = Modifier.size(48.dp), tint = PicoTheme.colorScheme.labelPrimary)
+            Body(rs(R.string.quit_keep), 2, color = PicoTheme.colorScheme.labelSecondary)
+            ConfirmBlock(rs(R.string.quit_confirm), rs(R.string.btn_cancel), rs(R.string.btn_exit), "exit_no", "exit_yes", { confirmQuit = false }, { onEvent(TmEvent.Exit) })
         }
-        Segments(listOf("menu_zh" to rs(R.string.lang_zh), "menu_en" to rs(R.string.lang_en)), if (state.language == LanguagePref.EN || (state.language == LanguagePref.SYSTEM && Locale.getDefault().language != "zh")) 1 else 0, 368.dp) {
-            onEvent(TmEvent.LanguageSet(if (it == 0) LanguagePref.ZH else LanguagePref.EN))
+        return
+    }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        val english = state.language == LanguagePref.EN || (state.language == LanguagePref.SYSTEM && Locale.getDefault().language != "zh")
+        SettingRow(rs(R.string.menu_language)) {
+            Segments(listOf("menu_zh" to rs(R.string.lang_zh), "menu_en" to rs(R.string.lang_en)), if (english) 1 else 0, 320.dp) {
+                onEvent(TmEvent.LanguageSet(if (it == 0) LanguagePref.ZH else LanguagePref.EN))
+            }
         }
-        Segments(listOf("menu_gentle" to rs(R.string.intensity_gentle), "menu_standard" to rs(R.string.intensity_standard)), state.intensity.ordinal, 368.dp) {
-            onEvent(TmEvent.IntensitySet(Intensity.entries[it]))
+        SettingRow(rs(R.string.menu_intensity)) {
+            Segments(listOf("menu_gentle" to rs(R.string.intensity_gentle), "menu_standard" to rs(R.string.intensity_standard)), state.intensity.ordinal, 320.dp) {
+                onEvent(TmEvent.IntensitySet(Intensity.entries[it]))
+            }
         }
-        val full = Modifier.fillMaxWidth()
-        WordButton("menu_room", rs(R.string.btn_roomPage), { onEvent(TmEvent.MenuPageSet(MenuPage.ROOM)) }, modifier = full)
-        WordButton("menu_reset", rs(R.string.btn_resetToMe), { onEvent(TmEvent.ResetAroundMe) }, modifier = full, iconRes = R.drawable.ic_reset)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            WordButton("menu_reset", rs(R.string.btn_resetToMe), { onEvent(TmEvent.ResetAroundMe) }, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_reset)
+            WordButton("menu_recall", rs(R.string.btn_recall), onRecall, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_my_location)
+        }
         val locked = state.homeLocked
-        WordButton("menu_repin", if (locked) rs(R.string.btn_repinLocked) else rs(R.string.btn_repin), { onEvent(TmEvent.Repin) }, modifier = full, enabled = !locked)
+        val full = Modifier.fillMaxWidth()
+        WordButton("menu_repin", if (locked) rs(R.string.btn_repinLocked) else rs(R.string.btn_repin), { onEvent(TmEvent.Repin) }, modifier = full, enabled = !locked, iconRes = R.drawable.ic_pin)
         WordButton("menu_clear", if (locked) rs(R.string.btn_clearHomeLocked) else rs(R.string.btn_clearHome), { onEvent(TmEvent.ClearHome) }, modifier = full, enabled = !locked, iconRes = R.drawable.ic_trash)
         WordButton("menu_about", rs(R.string.btn_about), { onEvent(TmEvent.About) }, modifier = full, iconRes = R.drawable.ic_info)
-        WordButton("menu_exit", rs(R.string.btn_exit), { onEvent(TmEvent.Exit) }, modifier = full, iconRes = R.drawable.ic_exit)
+        WordButton("menu_exit", rs(R.string.btn_quit), { confirmQuit = true }, modifier = full, iconRes = R.drawable.ic_exit)
     }
 }
 
+
+/** One row of the how-to page: icon, the action, then how with hands and how with a controller. */
+private data class HowTo(val icon: Int, val title: Int, val hands: Int, val controller: Int)
+
+private val HOW_TO =
+    listOf(
+        HowTo(R.drawable.ic_pin, R.string.how_to_pin, R.string.how_to_pin_hands, R.string.how_to_pin_ctrl),
+        HowTo(R.drawable.ic_key, R.string.how_to_look, R.string.how_to_look_hands, R.string.how_to_look_ctrl),
+        HowTo(R.drawable.ic_drop, R.string.how_to_return, R.string.how_to_return_hands, R.string.how_to_return_ctrl),
+        HowTo(R.drawable.ic_check, R.string.how_to_unload, R.string.how_to_unload_hands, R.string.how_to_unload_ctrl),
+        HowTo(R.drawable.ic_quiet, R.string.how_to_quiet, R.string.how_to_quiet_hands, R.string.how_to_quiet_ctrl),
+        HowTo(R.drawable.ic_my_location, R.string.how_to_panel, R.string.how_to_panel_hands, R.string.how_to_panel_ctrl),
+    )
+
+/** The how-to page (profile B19): every main action in one place, one row each, hands and controller. */
 @Composable
-private fun RoomPage(state: TmUiState, onEvent: (TmEvent) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Key("room_back", R.drawable.ic_back, rs(R.string.btn_back)) { onEvent(TmEvent.MenuPageSet(MenuPage.MAIN)) }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(text = rs(R.string.room_title), color = PicoTheme.colorScheme.labelPrimary, style = TmType.title)
+internal fun HowToContent() {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (h in HOW_TO) {
+            Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                Icon(painter = painterResource(h.icon), contentDescription = null, modifier = Modifier.size(24.dp), tint = PicoTheme.colorScheme.labelPrimary)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    val title = rs(h.title)
+                    val hands = rs(R.string.how_to_hands_line, rs(h.hands))
+                    val ctrl = rs(R.string.how_to_ctrl_line, rs(h.controller))
+                    Text(text = title, color = PicoTheme.colorScheme.labelPrimary, style = PicoTheme.typography.labelLarge, maxLines = 1, onTextLayout = fits(title))
+                    Text(text = hands, color = PicoTheme.colorScheme.labelSecondary, style = PicoTheme.typography.bodySmall, maxLines = 2, onTextLayout = fits(hands))
+                    Text(text = ctrl, color = PicoTheme.colorScheme.labelSecondary, style = PicoTheme.typography.bodySmall, maxLines = 2, onTextLayout = fits(ctrl))
+                }
+            }
+        }
     }
-    val r = state.room
-    Stepper("room_l", rs(R.string.room_length), String.format(Locale.US, "%.1f m", r.length)) { onEvent(TmEvent.RoomStep('l', it)) }
-    Stepper("room_w", rs(R.string.room_width), String.format(Locale.US, "%.1f m", r.width)) { onEvent(TmEvent.RoomStep('w', it)) }
-    Stepper("room_h", rs(R.string.room_height), String.format(Locale.US, "%.1f m", r.height)) { onEvent(TmEvent.RoomStep('h', it)) }
-    Stepper("room_f", rs(R.string.room_floor), String.format(Locale.US, "%+.1f m", r.floorOffset)) { onEvent(TmEvent.RoomStep('f', it)) }
-    Spacer(modifier = Modifier.height(8.dp))
-    WordButton("room_done", rs(R.string.btn_back), { onEvent(TmEvent.MenuPageSet(MenuPage.MAIN)) }, modifier = Modifier.fillMaxWidth(), primary = true)
+}
+
+/** The room page: the virtual room's size (its dashed outline shows in the room while this page is open). */
+@Composable
+internal fun RoomContent(state: TmUiState, onEvent: (TmEvent) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Body(rs(R.string.room_hint), 2, color = PicoTheme.colorScheme.labelSecondary)
+        val r = state.room
+        Stepper("room_l", rs(R.string.room_length), String.format(Locale.US, "%.1f m", r.length)) { onEvent(TmEvent.RoomStep('l', it)) }
+        Stepper("room_w", rs(R.string.room_width), String.format(Locale.US, "%.1f m", r.width)) { onEvent(TmEvent.RoomStep('w', it)) }
+        Stepper("room_h", rs(R.string.room_height), String.format(Locale.US, "%.1f m", r.height)) { onEvent(TmEvent.RoomStep('h', it)) }
+        Stepper("room_f", rs(R.string.room_floor), String.format(Locale.US, "%+.1f m", r.floorOffset)) { onEvent(TmEvent.RoomStep('f', it)) }
+    }
 }
 
 /** Name, minus, value, plus (no SpatialUI stepper: two icon keys and a text, design `spatialUiMap.stepper`). */
 @Composable
 private fun Stepper(name: String, label: String, value: String, onStep: (Int) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text = label, color = PicoTheme.colorScheme.labelPrimary, style = PicoTheme.typography.labelLarge, modifier = Modifier.weight(1f), maxLines = 1)
+    Row(modifier = Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text = label, color = PicoTheme.colorScheme.labelPrimary, style = TmType.title, modifier = Modifier.weight(1f), maxLines = 1, onTextLayout = fits(label))
         Key("${name}_minus", R.drawable.ic_minus, "-") { onStep(-1) }
-        Box(modifier = Modifier.width(96.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-            Text(text = value, color = PicoTheme.colorScheme.labelPrimary, style = TmType.figure)
+        Box(modifier = Modifier.width(112.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+            Text(text = value, color = PicoTheme.colorScheme.labelPrimary, style = TmType.subhead.copy(fontFeatureSettings = "tnum, lnum"))
         }
         Key("${name}_plus", R.drawable.ic_plus, "+") { onStep(+1) }
     }
@@ -299,20 +379,7 @@ internal fun LabelPanel(id: SourceId, filled: Boolean, unloaded: Boolean) {
     Glass(w.dp, h.dp, corner = 28.dp, padding = 8.dp) {
         if (!filled) return@Glass
         Box(modifier = Modifier.fillMaxWidth().height(40.dp).alpha(if (unloaded) 0.7f else 1f), contentAlignment = Alignment.Center) {
-            Text(text = rs(srcName(id)), color = PicoTheme.colorScheme.labelPrimary, style = PicoTheme.typography.titleLarge.copy(fontSize = androidx.compose.ui.unit.TextUnit(28f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = FontWeight.SemiBold), maxLines = 1)
-        }
-    }
-}
-
-/** The room's size on the front wall while the room page is open. */
-@Composable
-internal fun RoomTag(state: TmUiState, filled: Boolean) {
-    val (w, h) = PanelSpec.ROOM_TAG_SIZE
-    Glass(w.dp, h.dp, corner = 28.dp, padding = 8.dp) {
-        if (!filled) return@Glass
-        val r = state.room
-        Box(modifier = Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
-            Text(text = rs(R.string.room_tag, String.format(Locale.US, "%.1f", r.length), String.format(Locale.US, "%.1f", r.width), String.format(Locale.US, "%.1f", r.height)), color = PicoTheme.colorScheme.labelPrimary, style = TmType.title, maxLines = 1)
+            Text(text = rs(srcName(id)), color = PicoTheme.colorScheme.labelPrimary, style = PicoTheme.typography.titleLarge.copy(fontSize = TextUnit(28f, TextUnitType.Sp), fontWeight = FontWeight.SemiBold), maxLines = 1)
         }
     }
 }

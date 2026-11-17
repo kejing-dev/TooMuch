@@ -8,6 +8,7 @@ about -14 dBFS RMS with peaks at or below -1 dBFS (whichever is lower).
 """
 import math
 import os
+import sys
 import random
 import struct
 import wave
@@ -224,18 +225,22 @@ def ui_ding(rng):
 
 
 def main():
-    write("fridge", fridge(random.Random(1)))
-    write("fridge_hiss", fridge_hiss(random.Random(2)))
-    write("clock", clock(random.Random(3), 1000))
-    write("clock_hard", clock(random.Random(3), 2000))
-    rng = random.Random(4)
-    for v in range(6):
-        write("bag_%d" % v, bag(rng, rng.uniform(0.3, 1.2)))
-    write("tap", drips(random.Random(5), bass=False))
-    write("tap_bass", drips(random.Random(5), bass=True))
-    write("lamp", lamp(random.Random(6)))
-    for v in range(2):
-        write("phone_%d" % v, phone(random.Random(7), v))
+    # v0.1.1: the real-object sounds are CC0 recordings (tools/import_cc0.py, sources in the factory's
+    # apps/too-much/build/sound-sources.md); only the two UI cues stay synthesised. The object generators above are
+    # kept for reference only (`--objects` writes them, never for a release).
+    if "--objects" in sys.argv:
+        write("fridge", fridge(random.Random(1)))
+        write("fridge_hiss", fridge_hiss(random.Random(2)))
+        write("clock", clock(random.Random(3), 1000))
+        write("clock_hard", clock(random.Random(3), 2000))
+        rng = random.Random(4)
+        for v in range(6):
+            write("bag_%d" % v, bag(rng, rng.uniform(0.3, 1.2)))
+        write("tap", drips(random.Random(5), bass=False))
+        write("tap_bass", drips(random.Random(5), bass=True))
+        write("lamp", lamp(random.Random(6)))
+        for v in range(2):
+            write("phone_%d" % v, phone(random.Random(7), v))
     write("ui_snap", ui_snap(None))
     write("ui_ding", ui_ding(None))
     total = sum(os.path.getsize(os.path.join(OUT, f)) for f in os.listdir(OUT))

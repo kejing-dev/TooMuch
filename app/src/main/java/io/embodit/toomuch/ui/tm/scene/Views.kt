@@ -37,8 +37,11 @@ internal class Meshes(private val shared: SharedResources) {
     lateinit var keyRing: MeshResource
     lateinit var aim: MeshResource
 
+    /** The tray things' parts (ItemModels): per item, per part, the up-facing and the side mesh. */
+    val items = HashMap<ItemId, MutableList<Pair<MeshResource?, MeshResource?>>>()
+
     private val steps: List<() -> Unit> =
-        listOf(
+        listOf<() -> Unit>(
             { cube = shared.keep(MeshFactory.cube("tm:cube")) },
             { quad = shared.keep(MeshFactory.quadUv("tm:quad")) },
             { ring = shared.keep(MeshFactory.ringXY(0.486f, "tm:ring")) },
@@ -48,7 +51,18 @@ internal class Meshes(private val shared: SharedResources) {
             { mug = shared.keep(MeshFactory.cylinder(0.04f, 0.095f, "tm:mug")) },
             { keyRing = shared.keep(MeshFactory.cylinder(0.016f, 0.004f, "tm:keyring", segments = 16)) },
             { aim = shared.keep(MeshFactory.ringXY(0.38f, "tm:aim", segments = 32)) },
-        )
+        ) +
+            // one part (two meshes) per step: many meshes in one frame stall the emulator (ANR)
+            ItemId.entries.flatMap { id ->
+                ItemModels.parts(id).mapIndexed { i, part ->
+                    {
+                        val b = MeshBuilder()
+                        part.build(b)
+                        val (up, side) = b.build("tm:item:${id.tag}:$i")
+                        items.getOrPut(id) { ArrayList() } += (up?.let { shared.keep(it) } to side?.let { shared.keep(it) })
+                    }
+                }
+            }
     private var next = 0
 
     /** Builds the next mesh; false when all are built. */
@@ -160,6 +174,18 @@ internal class RoomView(private val parent: Entity, private val m: Meshes, priva
     }
 
     fun isFace(e: Entity): Boolean = faces.any { it.id == e.id }
+
+    private var pinnable = true
+
+    /**
+     * D24: the six face colliders are the pinning tool's target only. Outside pinning they are disabled, so no ray,
+     * gaze or pinch meets an invisible room shell (reality-audit.md).
+     */
+    fun setPinnable(on: Boolean) {
+        if (on == pinnable) return
+        pinnable = on
+        faces.forEach { it.enabled = on }
+    }
 
     /** Rebuilds lines, colliders and outlines when the size or the frame changed. */
     fun sync(size: RoomSize, frame: RoomFrame, spots: List<DefaultSpot>) {
@@ -276,7 +302,7 @@ internal class TrayView(parent: Entity, private val m: Meshes, private val mats:
     private val hookArm = ModelEntity(m.cube, mats.hook).named("tray:hookArm")
     private val outlines = HashMap<ItemId, List<Strip>>()
     private val items = HashMap<ItemId, Entity>()
-    private val bodies = HashMap<ItemId, Entity>()
+    private val bodies = HashMap<ItemId, List<Entity>>()
     private var shown = false
     private var pose: Placement.TrayPose? = null
 
@@ -313,30 +339,16 @@ internal class TrayView(parent: Entity, private val m: Meshes, private val mats:
             val holder = Entity().named("item:${id.tag}")
             root.addChild(holder)
             val (w, hgt, d) = TrayLayout.size[id]!!
-            when (id) {
-                ItemId.MUG -> {
-                    val body = ModelEntity(m.mug, mats.mug).named("item:${id.tag}:body")
-                    holder.addChild(body)
-                    bodies[id] = body
-                }
-                ItemId.KEYS -> {
-                    val ring = ModelEntity(m.keyRing, mats.brass).named("item:keys:ring")
-                    holder.addChild(ring)
-                    ring.setLocal(position = Vec3(-0.025f, -0.002f, 0f))
-                    for (k in 0 until 3) {
-                        val key = ModelEntity(m.cube, mats.brass).named("item:keys:$k")
-                        holder.addChild(key)
-                        val a = (k - 1) * 0.45f
-                        key.setLocal(position = Vec3(0.012f + 0.028f * cos(a), 0f, 0.028f * sin(a)), rotation = Quat4.axisAngle(Vec3.UP, -a), scale = Vec3(0.06f, 0.004f, 0.012f))
-                    }
-                }
-                else -> {
-                    val body = ModelEntity(m.cube, materialOf(id)).named("item:${id.tag}:body")
-                    holder.addChild(body)
-                    body.setLocal(position = Vec3(0f, hgt / 2f, 0f), scale = Vec3(w, hgt, d))
-                    bodies[id] = body
-                }
+            // v0.1.2 (QA #2 q2-1): modelled things (ItemModels), each part as an up-facing and a darker side mesh
+            val parts = ArrayList<Entity>()
+            val meshes = m.items[id].orEmpty()
+            for ((i, part) in ItemModels.parts(id).withIndex()) {
+                val (upMesh, sideMesh) = meshes.getOrNull(i) ?: continue
+                val (upMat, sideMat) = mats.tone(part.color)
+                upMesh?.let { parts += ModelEntity(it, upMat).named("item:${id.tag}:$i:up").also { e -> holder.addChild(e) } }
+                sideMesh?.let { parts += ModelEntity(it, sideMat).named("item:${id.tag}:$i:side").also { e -> holder.addChild(e) } }
             }
+            bodies[id] = parts
             holder.tapBox(Vec3(w + 0.02f, hgt + 0.03f, d + 0.02f), Vec3(0f, hgt / 2f, 0f))
             runCatching { holder.components.set(HoverEffectComponent()) }
             items[id] = holder
@@ -344,21 +356,10 @@ internal class TrayView(parent: Entity, private val m: Meshes, private val mats:
         root.enabled = false
     }
 
-    private fun materialOf(id: ItemId): Material =
-        when (id) {
-            ItemId.ENVELOPE1, ItemId.ENVELOPE2 -> mats.envelope
-            ItemId.NOTEBOOK -> mats.notebook
-            ItemId.SCARF -> mats.scarf
-            ItemId.GLASSES -> mats.glasses
-            ItemId.BOOK -> mats.book
-            ItemId.REMOTE -> mats.remote
-            else -> mats.mug
-        }
-
     /** Which tray thing an entity belongs to (holder or body). */
     fun itemOf(e: Entity): ItemId? {
         for ((id, h) in items) if (h.id == e.id) return id
-        for ((id, b) in bodies) if (b.id == e.id) return id
+        for ((id, list) in bodies) if (list.any { it.id == e.id }) return id
         return null
     }
 

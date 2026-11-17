@@ -92,7 +92,13 @@ object DebugCommands {
             }
             "panels" -> host.scene()?.panelLines()?.forEach { TmLog.i(it) }
             "pose" -> TmLog.i(host.scene()?.poseLine() ?: "POSE none")
-            "park" -> TmLog.i("CMD ${host.scene()?.parkPanel()}")
+            "window" -> {
+                // open (through the level gate) / close (as its ×) / recall ([Bring panel here])
+                val what = id ?: "open"
+                TmLog.i("CMD window $what")
+                host.window(what)
+            }
+            "tab" -> send(TmEvent.TabSelected(id ?: "now"))
             "uvtest" -> TmLog.i("CMD ${host.scene()?.setUvTest(bool(x, "on") ?: true)}")
             "ui" -> {
                 val name = id ?: str(x, "name") ?: ""
